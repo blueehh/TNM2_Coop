@@ -1,0 +1,1745 @@
+--- original_coop/AllianceToggleTrigger.uc
++++ current/AllianceToggleTrigger.uc
+@@ -40,7 +40,7 @@
+ 	if (!IsRelevant(Other))
+ 		return;
+ 
+-	if (SetAlliancesOn())
++	if (SetAlliancesOn(Other))
+ 		if (bTriggerOnceOnly)
+ 			Destroy();
+ }
+@@ -50,14 +50,18 @@
+ 	if (!IsRelevant(Other))
+ 		return;
+ 
+-	if (SetAlliancesOff())
++	if (SetAlliancesOff(Other))
+ 		if (bTriggerOnceOnly)
+ 			Destroy();
+ }
+ 
+-function bool SetAlliancesOn()
++// Toucher is the player walking in or out. Triggered by an event (no toucher),
++// the change applies to every player. In co-op the trespass flag used to be set
++// on the host only, whoever walked in.
++function bool SetAlliancesOn(optional Actor Toucher)
+ {
+ 	local TNMPawn P;
++	local Pawn aPawn;
+ 	local int i;
+ 
+ 	// find the target NPC to set alliances
+@@ -65,22 +69,43 @@
+ 		foreach AllActors (class'TNMPawn', P, Event)
+ 			P.bHateBreakAndEnter = true;
+ 
+-	trestkon(GetPlayerPawn()).bBreakAndEnter = true;
++	if (Trestkon(Toucher) != None)
++		Trestkon(Toucher).bBreakAndEnter = true;
++	else
++		for (aPawn = Level.PawnList; aPawn != None; aPawn = aPawn.NextPawn)
++			if (Trestkon(aPawn) != None)
++				Trestkon(aPawn).bBreakAndEnter = true;
+ 
+ 	return True;
+ }
+ 
+-function bool SetAlliancesOff()
++function bool SetAlliancesOff(optional Actor Toucher)
+ {
+ 	local TNMPawn P;
++	local Pawn aPawn;
++	local Trestkon T;
+ 	local int i;
++
++	if (Trestkon(Toucher) != None)
++	{
++		Trestkon(Toucher).bBreakAndEnter = false;
++
++		// someone else is still trespassing, keep the NPCs hostile to them
++		foreach TouchingActors(class'Trestkon', T)
++			if (T != Toucher)
++				return True;
++	}
++	else
++	{
++		for (aPawn = Level.PawnList; aPawn != None; aPawn = aPawn.NextPawn)
++			if (Trestkon(aPawn) != None)
++				Trestkon(aPawn).bBreakAndEnter = false;
++	}
+ 
+ 	// find the target NPC to set alliances
+ 	if (Event != '')
+ 		foreach AllActors (class'TNMPawn', P, Event)
+ 			P.bHateBreakAndEnter = false;
+ 
+-	trestkon(GetPlayerPawn()).bBreakAndEnter = false;
+-
+ 	return True;
+ }
+--- original_coop/CoopTurretSafeTarget.uc
++++ current/CoopTurretSafeTarget.uc
+@@ -0,0 +1,21 @@
++//=============================================================================
++// CoopTurretSafeTarget.
++//
++// Placeholder AutoTurret.safeTarget for co-op (see tnmGameInfo.CoopUpdateTurrets).
++// AutoTurret.Tick disables any turret without a safeTarget in netgames. This
++// pawn is never added to the PawnList, can't be seen, hit or targeted, and is
++// not a valid enemy (no health, bIgnore) when turrets pass it as the attacker.
++//=============================================================================
++class CoopTurretSafeTarget extends Pawn;
++
++event PreBeginPlay()
++{
++}
++
++event PostBeginPlay()
++{
++}
++
++function TakeDamage(int Damage, Pawn EventInstigator, vector HitLocation, vector Momentum, name DamageType)
++{
++}
+--- original_coop/DrownTrigger.uc
++++ current/DrownTrigger.uc
+@@ -26,6 +26,9 @@
+ 	if(bEnabled)
+ 		return;
+ 
++	// drown whoever set this off; fall back to the host
++	if (Trestkon(Instigator) != None)
++		player = Trestkon(Instigator);
+ 	if(player==None)
+ 		player=Trestkon(GetPlayerPawn());
+ 
+--- original_coop/tnmaugmentationmanager.uc
++++ current/tnmaugmentationmanager.uc
+@@ -1,4 +1,6 @@
+ class tnmaugmentationmanager extends augmentationmanager;
++
++var float coopAugRestoreTimer;
+ 
+ simulated function int NumAugsActive()
+ {
+@@ -242,6 +244,25 @@
+ 	RestoreSinglePlayerAugStats();
+ }
+ 
++// Augmentations replicate after the manager, and each one's simulated
++// PreBeginPlay swaps in its mp* level value on the client (AugSpeed level 4 is
++// 2.0 instead of 1.8). LevelValues aren't replicated, so keep resetting them or
++// the client predicts a different run speed than the server simulates.
++simulated function Tick(float DeltaTime)
++{
++	Super.Tick(DeltaTime);
++
++	if (Role < ROLE_Authority)
++	{
++		coopAugRestoreTimer -= DeltaTime;
++		if (coopAugRestoreTimer <= 0)
++		{
++			coopAugRestoreTimer = 1.0;
++			RestoreSinglePlayerAugStats();
++		}
++	}
++}
++
+ // ----------------------------------------------------------------------
+ // ActivateAugByKey()
+ // ----------------------------------------------------------------------
+--- original_coop/tnmcarcass.uc
++++ current/tnmcarcass.uc
+@@ -1028,7 +1028,8 @@
+ 	// and since the PutInHand propagation doesn't just work, this is work we don't need to do.
+ 	// Were you to do it, you'd need to check the respawning issue, destroy the POVcorpse it creates and point to the
+ 	// one in inventory (like I did when giving the player starting inventory).
+-	if ((!bAnimalCarcass) && (Inventory == None) && (player != None) && (player.inHand == None) && (Level.NetMode == NM_Standalone))
++	// Co-op (tnmGameInfo) allows it: the server spawns the POVCorpse and PutInHand replicates like any item.
++	if ((!bAnimalCarcass) && (Inventory == None) && (player != None) && (player.inHand == None) && ((Level.NetMode == NM_Standalone) || (tnmGameInfo(Level.Game) != None)))
+ 	{
+ 		if (!bInvincible && associatedRespawnInfo == None)
+ 		{
+@@ -1076,7 +1077,7 @@
+ 			}
+ 		}
+ 	}
+-	else if ((bAnimalCarcass) && (Inventory == None) && (player != None) && (player.inHand == None) && (Level.NetMode == NM_Standalone)) // Pick up animal carcasses like a prop
++	else if ((bAnimalCarcass) && (Inventory == None) && (player != None) && (player.inHand == None) && ((Level.NetMode == NM_Standalone) || (tnmGameInfo(Level.Game) != None))) // Pick up animal carcasses like a prop
+ 	{
+ 		if (associatedRespawnInfo == None)
+ 			Player.GrabDecoration();
+--- original_coop/TNMGameInfo.uc
++++ current/TNMGameInfo.uc
+@@ -30,6 +30,23 @@
+ var byte DeferForce[4];
+ var Trestkon DeferPlayer[4];
+ var int NumDeferred;
++
++// Co-op flag merge (see CoopMergeFlags)
++var bool bCoopFlagMergeActive;
++var Trestkon CoopFlagPeer[4];
++var FlagBase CoopFlagBaseline[4];	// last state both host and peer agreed on
++var FlagBase CoopFlagMirror[4];		// what the peer's own machine has been sent
++
++// Co-op turret control (see CoopUpdateTurrets)
++var AutoTurret CoopTurrets[64];
++var byte CoopTurretMapDisabled[64];
++var int NumCoopTurrets;
++var bool bCoopTurretsSettled;
++var CoopTurretSafeTarget CoopTurretDummy;
++
++// Co-op weapon stay pickups (see CoopNoteStayPickupTaken)
++var Weapon CoopStayPickup[128];
++var Pawn CoopStayTaker[512];		// 4 per pickup
+ 
+ var config bool bHasCoopSession;
+ var config string SavedCurrentURL;
+@@ -383,8 +400,54 @@
+ 	
+ 	if (Trestkon(Other) != None)
+ 		playerkiller = killer;
+-	
++
++	if ((Trestkon(Other) != None) && (Level.NetMode != NM_Standalone))
++		CoopAbortConversationsFor(Trestkon(Other));
++
+ 	Super.Killed(killer, other, damagetype);
++}
++
++// A player dying mid-conversation left the conversation (and the NPC's
++// 'Conversation' state) orphaned or marked as played. End it without setting
++// the played flag so it can be started again.
++function CoopAbortConversationsFor(Trestkon Victim)
++{
++	local Pawn P;
++	local Trestkon T;
++
++	for (P = Level.PawnList; P != None; P = P.NextPawn)
++	{
++		T = Trestkon(P);
++		if ((T == None) || (T.conPlay == None))
++			continue;
++		if ((T == Victim) || ((tnmConPlay(T.conPlay) != None) && (tnmConPlay(T.conPlay).ResolveCoopPlayer() == Victim)))
++			T.conPlay.TerminateConversation(False, True);
++	}
++}
++
++// Picking up a decoration turns its collision off; a player disconnecting while
++// carrying one left it floating and intangible.
++function Logout(Pawn Exiting)
++{
++	local DeusExPlayer DXP;
++	local Decoration Deco;
++
++	DXP = DeusExPlayer(Exiting);
++	if ((DXP != None) && (DXP.CarriedDecoration != None))
++	{
++		Deco = DXP.CarriedDecoration;
++		DXP.DropDecoration();
++		if ((Deco != None) && !Deco.bDeleteMe && (DXP.CarriedDecoration == Deco))
++		{
++			DXP.CarriedDecoration = None;
++			Deco.SetBase(None);
++			Deco.bCollideWorld = Deco.Default.bCollideWorld;
++			Deco.SetCollision(Deco.Default.bCollideActors, Deco.Default.bBlockActors, Deco.Default.bBlockPlayers);
++			Deco.SetPhysics(PHYS_Falling);
++		}
++	}
++
++	Super.Logout(Exiting);
+ }
+ 
+ // ----------------------------------------------------------------------
+@@ -470,6 +533,7 @@
+ 		{
+ 			SP.bTickVisibleOnly = False;
+ 		}
++		CoopRefreshTurretList(True);
+ 	}
+ 	
+ 	//Bjorn: We need to convert the CombatDifficulty to match the Difficulty var that the engine uses for filter out stuff on difficulty.
+@@ -551,6 +615,7 @@
+ 	}
+ 	if (Level.NetMode != NM_Standalone)
+ 	{
++		CoopUpdateTurrets();
+ 		SyncCoopState();
+ 		SetTimer(1.0, True);
+ 	}
+@@ -839,6 +904,8 @@
+ 
+ 	if( Level.NetMode!=NM_DedicatedServer && Level.NetMode!=NM_ListenServer )
+ 		Level.NextSwitchCountdown = 0.0;
++	else
++		Level.NextSwitchCountdown = FMax(Level.NextSwitchCountdown, 2.5);	// ClientTravel is queued behind other reliable traffic
+ }
+ 
+ function Timer()
+@@ -896,6 +963,10 @@
+ 			HostPlayer.StartConversationByByteMethod(dActor, dMethod, dCon, dAvoid, dForce);
+ 	}
+ 
++	if (HostPlayer != None)
++		CoopMergeFlags(HostPlayer);
++	CoopRefreshTurretList(False);
++
+ 	for (P1 = Level.PawnList; P1 != None; P1 = P1.NextPawn)
+ 	{
+ 		Src = Trestkon(P1);
+@@ -903,6 +974,8 @@
+ 			continue;
+ 
+ 		Src.CheckServerAugCanConsumption();
++		if (NetConnection(Src.Player) != None)
++			Src.CoopSyncWeaponMods();
+ 
+ 		for (P2 = Level.PawnList; P2 != None; P2 = P2.NextPawn)
+ 		{
+@@ -961,6 +1034,600 @@
+ 	}
+ }
+ 
++// ----------------------------------------------------------------------
++// Co-op flag merge
++//
++// Each player has its own flagBase on the server. The old sync only ever copied
++// True (and non-zero ints) between them, in both directions, so a flag a script
++// cleared on one player was set again from the other player's copy a second
++// later. This is a three-way merge against the last agreed state: whichever
++// side changed a flag since then wins, the host wins a conflict.
++// ----------------------------------------------------------------------
++
++function bool CoopFlagExcluded(Name flagName)
++{
++	local string s;
++
++	if (flagName == 'PlayerTraveling')
++		return True;
++	s = string(flagName);
++	if (Left(s, 3) ~= "CS_")
++		return True;
++	if (Left(s, 7) ~= "SKTemp_")
++		return True;
++	return False;
++}
++
++function int CoopFindFlagPeer(Trestkon Peer)
++{
++	local int i, freeSlot;
++
++	freeSlot = -1;
++	for (i = 0; i < ArrayCount(CoopFlagPeer); i++)
++	{
++		if (CoopFlagPeer[i] == Peer)
++			return i;
++		if ((freeSlot == -1) && ((CoopFlagPeer[i] == None) || CoopFlagPeer[i].bDeleteMe))
++			freeSlot = i;
++	}
++	if (freeSlot == -1)
++		return -1;
++
++	CoopFlagPeer[freeSlot] = Peer;
++	CoopFlagBaseline[freeSlot] = None;
++	CoopFlagMirror[freeSlot] = None;
++	return freeSlot;
++}
++
++function CoopMergeFlags(Trestkon Host)
++{
++	local Pawn P;
++	local Trestkon Peer;
++	local int i;
++	local bool bSeed;
++
++	if ((Host == None) || (Host.flagBase == None))
++		return;
++
++	for (P = Level.PawnList; P != None; P = P.NextPawn)
++	{
++		Peer = Trestkon(P);
++		if ((Peer == None) || (Peer == Host) || (Peer.flagBase == None) || Peer.bDeleteMe)
++			continue;
++
++		i = CoopFindFlagPeer(Peer);
++		if (i == -1)
++			continue;
++
++		bSeed = False;
++		if (CoopFlagBaseline[i] == None)
++		{
++			CoopFlagBaseline[i] = new(None) class'FlagBase';
++			if (CoopFlagBaseline[i] == None)
++				continue;
++			bSeed = True;
++		}
++		bCoopFlagMergeActive = True;
++
++		CoopMergeBoolFlags(Host.flagBase, Peer.flagBase, CoopFlagBaseline[i], bSeed);
++		CoopMergeIntFlags(Host.flagBase, Peer.flagBase, CoopFlagBaseline[i], bSeed);
++		CoopMergeNameFlags(Host.flagBase, Peer.flagBase, CoopFlagBaseline[i], bSeed);
++
++		if (NetConnection(Peer.Player) != None)
++		{
++			if (CoopFlagMirror[i] == None)
++				CoopFlagMirror[i] = new(None) class'FlagBase';
++			if (CoopFlagMirror[i] != None)
++				CoopMirrorBoolFlags(Peer, CoopFlagMirror[i]);
++		}
++	}
++}
++
++// bSeed: first merge on this map. The host wins every difference, flags only
++// the peer has are added to the host.
++function CoopMergeBoolFlags(FlagBase H, FlagBase C, FlagBase B, bool bSeed)
++{
++	local int it, i, nToHost, nToPeer;
++	local Name flagName;
++	local bool hVal, cVal;
++	local Name toHostName[128], toPeerName[128];
++	local byte toHostVal[128], toPeerVal[128];
++	local int toHostExp[128], toPeerExp[128];
++
++	it = H.CreateIterator(FLAG_Bool);
++	while (H.GetNextFlagName(it, flagName))
++	{
++		if (CoopFlagExcluded(flagName))
++			continue;
++		hVal = H.GetBool(flagName);
++		cVal = C.GetBool(flagName);
++		if (hVal == cVal)
++		{
++			if (!B.CheckFlag(flagName, FLAG_Bool) || (B.GetBool(flagName) != hVal))
++				B.SetBool(flagName, hVal, True, 0);
++		}
++		else if (bSeed || (hVal != B.GetBool(flagName)))
++		{
++			if (nToPeer >= ArrayCount(toPeerName))
++				break;
++			toPeerName[nToPeer] = flagName;
++			toPeerVal[nToPeer] = byte(hVal);
++			toPeerExp[nToPeer] = H.GetExpiration(flagName, FLAG_Bool);
++			nToPeer++;
++		}
++		else
++		{
++			if (nToHost >= ArrayCount(toHostName))
++				break;
++			toHostName[nToHost] = flagName;
++			toHostVal[nToHost] = byte(cVal);
++			toHostExp[nToHost] = C.GetExpiration(flagName, FLAG_Bool);
++			nToHost++;
++		}
++	}
++	H.DestroyIterator(it);
++
++	// flags the host doesn't have at all (treated as False on the host)
++	it = C.CreateIterator(FLAG_Bool);
++	while (C.GetNextFlagName(it, flagName))
++	{
++		if (CoopFlagExcluded(flagName) || H.CheckFlag(flagName, FLAG_Bool))
++			continue;
++		cVal = C.GetBool(flagName);
++		if (!cVal)
++		{
++			if (!B.CheckFlag(flagName, FLAG_Bool) || B.GetBool(flagName))
++				B.SetBool(flagName, False, True, 0);
++		}
++		else if (!bSeed && B.GetBool(flagName))
++		{
++			if (nToPeer >= ArrayCount(toPeerName))
++				break;
++			toPeerName[nToPeer] = flagName;
++			toPeerVal[nToPeer] = 0;
++			toPeerExp[nToPeer] = C.GetExpiration(flagName, FLAG_Bool);
++			nToPeer++;
++		}
++		else
++		{
++			if (nToHost >= ArrayCount(toHostName))
++				break;
++			toHostName[nToHost] = flagName;
++			toHostVal[nToHost] = 1;
++			toHostExp[nToHost] = C.GetExpiration(flagName, FLAG_Bool);
++			nToHost++;
++		}
++	}
++	C.DestroyIterator(it);
++
++	for (i = 0; i < nToPeer; i++)
++	{
++		C.SetBool(toPeerName[i], bool(toPeerVal[i]), True, toPeerExp[i]);
++		B.SetBool(toPeerName[i], bool(toPeerVal[i]), True, 0);
++	}
++	for (i = 0; i < nToHost; i++)
++	{
++		H.SetBool(toHostName[i], bool(toHostVal[i]), True, toHostExp[i]);
++		B.SetBool(toHostName[i], bool(toHostVal[i]), True, 0);
++	}
++}
++
++function CoopMergeIntFlags(FlagBase H, FlagBase C, FlagBase B, bool bSeed)
++{
++	local int it, i, nToHost, nToPeer;
++	local Name flagName;
++	local int hVal, cVal;
++	local Name toHostName[64], toPeerName[64];
++	local int toHostVal[64], toPeerVal[64];
++	local int toHostExp[64], toPeerExp[64];
++
++	it = H.CreateIterator(FLAG_Int);
++	while (H.GetNextFlagName(it, flagName))
++	{
++		if (CoopFlagExcluded(flagName))
++			continue;
++		hVal = H.GetInt(flagName);
++		cVal = C.GetInt(flagName);
++		if (hVal == cVal)
++		{
++			if (!B.CheckFlag(flagName, FLAG_Int) || (B.GetInt(flagName) != hVal))
++				B.SetInt(flagName, hVal, True, 0);
++		}
++		else if (bSeed || (hVal != B.GetInt(flagName)))
++		{
++			if (nToPeer >= ArrayCount(toPeerName))
++				break;
++			toPeerName[nToPeer] = flagName;
++			toPeerVal[nToPeer] = hVal;
++			toPeerExp[nToPeer] = H.GetExpiration(flagName, FLAG_Int);
++			nToPeer++;
++		}
++		else
++		{
++			if (nToHost >= ArrayCount(toHostName))
++				break;
++			toHostName[nToHost] = flagName;
++			toHostVal[nToHost] = cVal;
++			toHostExp[nToHost] = C.GetExpiration(flagName, FLAG_Int);
++			nToHost++;
++		}
++	}
++	H.DestroyIterator(it);
++
++	it = C.CreateIterator(FLAG_Int);
++	while (C.GetNextFlagName(it, flagName))
++	{
++		if (CoopFlagExcluded(flagName) || H.CheckFlag(flagName, FLAG_Int))
++			continue;
++		cVal = C.GetInt(flagName);
++		if (cVal == 0)
++		{
++			if (!B.CheckFlag(flagName, FLAG_Int) || (B.GetInt(flagName) != 0))
++				B.SetInt(flagName, 0, True, 0);
++		}
++		else if (!bSeed && (B.GetInt(flagName) == cVal))
++		{
++			if (nToPeer >= ArrayCount(toPeerName))
++				break;
++			toPeerName[nToPeer] = flagName;
++			toPeerVal[nToPeer] = 0;
++			toPeerExp[nToPeer] = C.GetExpiration(flagName, FLAG_Int);
++			nToPeer++;
++		}
++		else
++		{
++			if (nToHost >= ArrayCount(toHostName))
++				break;
++			toHostName[nToHost] = flagName;
++			toHostVal[nToHost] = cVal;
++			toHostExp[nToHost] = C.GetExpiration(flagName, FLAG_Int);
++			nToHost++;
++		}
++	}
++	C.DestroyIterator(it);
++
++	for (i = 0; i < nToPeer; i++)
++	{
++		C.SetInt(toPeerName[i], toPeerVal[i], True, toPeerExp[i]);
++		B.SetInt(toPeerName[i], toPeerVal[i], True, 0);
++	}
++	for (i = 0; i < nToHost; i++)
++	{
++		H.SetInt(toHostName[i], toHostVal[i], True, toHostExp[i]);
++		B.SetInt(toHostName[i], toHostVal[i], True, 0);
++	}
++}
++
++function CoopMergeNameFlags(FlagBase H, FlagBase C, FlagBase B, bool bSeed)
++{
++	local int it, i, nToHost, nToPeer;
++	local Name flagName;
++	local Name hVal, cVal;
++	local Name toHostName[32], toPeerName[32];
++	local Name toHostVal[32], toPeerVal[32];
++	local int toHostExp[32], toPeerExp[32];
++
++	it = H.CreateIterator(FLAG_Name);
++	while (H.GetNextFlagName(it, flagName))
++	{
++		if (CoopFlagExcluded(flagName))
++			continue;
++		hVal = H.GetName(flagName);
++		cVal = C.GetName(flagName);
++		if (hVal == cVal)
++		{
++			if (!B.CheckFlag(flagName, FLAG_Name) || (B.GetName(flagName) != hVal))
++				B.SetName(flagName, hVal, True, 0);
++		}
++		else if (bSeed || (hVal != B.GetName(flagName)))
++		{
++			if (nToPeer >= ArrayCount(toPeerName))
++				break;
++			toPeerName[nToPeer] = flagName;
++			toPeerVal[nToPeer] = hVal;
++			toPeerExp[nToPeer] = H.GetExpiration(flagName, FLAG_Name);
++			nToPeer++;
++		}
++		else
++		{
++			if (nToHost >= ArrayCount(toHostName))
++				break;
++			toHostName[nToHost] = flagName;
++			toHostVal[nToHost] = cVal;
++			toHostExp[nToHost] = C.GetExpiration(flagName, FLAG_Name);
++			nToHost++;
++		}
++	}
++	H.DestroyIterator(it);
++
++	it = C.CreateIterator(FLAG_Name);
++	while (C.GetNextFlagName(it, flagName))
++	{
++		if (CoopFlagExcluded(flagName) || H.CheckFlag(flagName, FLAG_Name))
++			continue;
++		cVal = C.GetName(flagName);
++		if (cVal == '')
++			continue;
++		if (!bSeed && (B.GetName(flagName) == cVal))
++			continue;	// host dropped it; leave the peer's stale copy alone
++		if (nToHost >= ArrayCount(toHostName))
++			break;
++		toHostName[nToHost] = flagName;
++		toHostVal[nToHost] = cVal;
++		toHostExp[nToHost] = C.GetExpiration(flagName, FLAG_Name);
++		nToHost++;
++	}
++	C.DestroyIterator(it);
++
++	for (i = 0; i < nToPeer; i++)
++	{
++		C.SetName(toPeerName[i], toPeerVal[i], True, toPeerExp[i]);
++		B.SetName(toPeerName[i], toPeerVal[i], True, 0);
++	}
++	for (i = 0; i < nToHost; i++)
++	{
++		H.SetName(toHostName[i], toHostVal[i], True, toHostExp[i]);
++		B.SetName(toHostName[i], toHostVal[i], True, 0);
++	}
++}
++
++// Mirror the peer's server-side bool flags onto its own machine, a bounded
++// number per call so a map's worth of flags can't overflow the reliable buffer.
++function CoopMirrorBoolFlags(Trestkon Peer, FlagBase M)
++{
++	local int it, sent;
++	local Name flagName;
++	local bool c;
++
++	it = Peer.flagBase.CreateIterator(FLAG_Bool);
++	while ((sent < 24) && Peer.flagBase.GetNextFlagName(it, flagName))
++	{
++		if (CoopFlagExcluded(flagName))
++			continue;
++		c = Peer.flagBase.GetBool(flagName);
++		if (M.CheckFlag(flagName, FLAG_Bool))
++		{
++			if (M.GetBool(flagName) == c)
++				continue;
++		}
++		else if (!c)
++		{
++			M.SetBool(flagName, False, True, 0);	// never sent as True, so the client doesn't have it
++			continue;
++		}
++		Peer.ClientSyncBoolFlag(flagName, c);
++		M.SetBool(flagName, c, True, 0);
++		sent++;
++	}
++	Peer.flagBase.DestroyIterator(it);
++}
++
++// ----------------------------------------------------------------------
++// Co-op turret control
++//
++// In netgames AutoTurret.Tick disables every turret whose safeTarget is None
++// (all map-placed turrets) and otherwise only targets DeusExPlayers via
++// AcquireMultiplayerTarget, ignoring bTrackPlayersOnly/bTrackPawnsOnly. Give
++// each turret a placeholder safeTarget, keep TargetRefreshTime below the
++// multiplayer refresh so it reuses prevTarget, and fill prevTarget with the
++// singleplayer target choice.
++// ----------------------------------------------------------------------
++
++function CoopRefreshTurretList(bool bRecordMapState)
++{
++	local AutoTurret T;
++	local int i;
++
++	// the recorded map state is only used by the first CoopUpdateTurrets()
++	NumCoopTurrets = 0;
++	foreach AllActors(class'AutoTurret', T)
++	{
++		if (NumCoopTurrets >= ArrayCount(CoopTurrets))
++			break;
++		if (bRecordMapState)
++			CoopTurretMapDisabled[NumCoopTurrets] = byte(T.bDisabled);
++		CoopTurrets[NumCoopTurrets] = T;
++		NumCoopTurrets++;
++	}
++	for (i = NumCoopTurrets; i < ArrayCount(CoopTurrets); i++)
++		CoopTurrets[i] = None;
++}
++
++function Tick(float DeltaTime)
++{
++	Super.Tick(DeltaTime);
++
++	if (Level.NetMode != NM_Standalone)
++		CoopUpdateTurrets();
++}
++
++function CoopUpdateTurrets()
++{
++	local AutoTurret T;
++	local int i;
++
++	if (NumCoopTurrets == 0)
++		return;
++
++	if (CoopTurretDummy == None)
++		CoopTurretDummy = Spawn(class'CoopTurretSafeTarget');
++
++	for (i = 0; i < NumCoopTurrets; i++)
++	{
++		T = CoopTurrets[i];
++		if ((T == None) || T.bDeleteMe)
++			continue;
++
++		// if a turret already ticked with no safeTarget it disabled itself; undo that once
++		if (!bCoopTurretsSettled && (T.bDisabled != bool(CoopTurretMapDisabled[i])))
++			T.bDisabled = bool(CoopTurretMapDisabled[i]);
++
++		if (T.safeTarget == None)
++			T.safeTarget = CoopTurretDummy;
++		T.TargetRefreshTime = 0;
++
++		if (T.bActive && !T.bDisabled && !T.bConfused && (T.gun != None))
++			T.prevTarget = CoopAcquireTurretTarget(T);
++		else
++			T.prevTarget = None;
++	}
++	bCoopTurretsSettled = True;
++}
++
++// AutoTurret.Tick's singleplayer branch
++function Actor CoopAcquireTurretTarget(AutoTurret T)
++{
++	local Pawn aPawn, HostPawn;
++	local ScriptedPawn sp;
++	local DeusExDecoration deco;
++	local DeusExPlayer aPlayer;
++	local Actor target;
++
++	HostPawn = GetPlayerPawn();
++
++	if (T.bTrackPlayersOnly || (!T.bTrackPlayersOnly && !T.bTrackPawnsOnly))
++	{
++		foreach T.gun.VisibleActors(class'Pawn', aPawn, T.maxRange, T.gun.Location)
++		{
++			if (aPawn.bDetectable && !aPawn.bIgnore)
++			{
++				aPlayer = DeusExPlayer(aPawn);
++				if (aPlayer != None)
++				{
++					// If the player's RadarTrans aug is off, the turret can see him
++					if ((aPlayer.AugmentationSystem == None) || (aPlayer.AugmentationSystem.GetAugLevelValue(class'AugRadarTrans') == -1.0))
++					{
++						target = aPawn;
++						break;
++					}
++				}
++				else if (aPawn.IsA('ScriptedPawn') && (int(ScriptedPawn(aPawn).GetPawnAllianceType(HostPawn)) != 2))
++				{
++					target = aPawn;
++					break;
++				}
++			}
++		}
++	}
++
++	if (!T.bTrackPlayersOnly)
++	{
++		if (!T.bTrackPawnsOnly)
++		{
++			foreach T.gun.VisibleActors(class'DeusExDecoration', deco, T.maxRange, T.gun.Location)
++			{
++				if (!deco.IsA('ElectronicDevices') && !deco.IsA('AutoTurret') &&
++					!deco.bInvincible && deco.bDetectable && !deco.bIgnore)
++				{
++					target = deco;
++					break;
++				}
++			}
++		}
++
++		foreach T.gun.VisibleActors(class'ScriptedPawn', sp, T.maxRange, T.gun.Location)
++		{
++			if (sp.bDetectable && !sp.bIgnore && (int(sp.GetPawnAllianceType(HostPawn)) == 2))
++			{
++				target = sp;
++				break;
++			}
++		}
++	}
++
++	return target;
++}
++
++// ----------------------------------------------------------------------
++// Co-op weapon pickups
++//
++// bCoopWeaponMode keeps world weapons in place so both players can gear up.
++// Track who took each one: a player can take a given pickup once, and it is
++// removed once every connected player has taken it.
++// ----------------------------------------------------------------------
++
++function int CoopFindStayPickup(Weapon W, bool bCreate)
++{
++	local int i, freeSlot;
++
++	freeSlot = -1;
++	for (i = 0; i < ArrayCount(CoopStayPickup); i++)
++	{
++		if (CoopStayPickup[i] == W)
++			return i;
++		if ((freeSlot == -1) && ((CoopStayPickup[i] == None) || CoopStayPickup[i].bDeleteMe))
++			freeSlot = i;
++	}
++	if (!bCreate || (freeSlot == -1))
++		return -1;
++
++	CoopStayPickup[freeSlot] = W;
++	for (i = 0; i < 4; i++)
++		CoopStayTaker[freeSlot * 4 + i] = None;
++	return freeSlot;
++}
++
++// Every pickup (frob -> Pickup.ValidTouch) asks this first, so a player who
++// already took a given stay pickup can't take it again even after losing it.
++function bool PickupQuery(Pawn Other, Inventory item)
++{
++	if ((Level.NetMode != NM_Standalone) && (Weapon(item) != None) && Weapon(item).bWeaponStay
++		&& !item.bHeldItem && !item.bTossedOut && CoopStayPickupTakenBy(Weapon(item), Other))
++		return false;
++
++	return Super.PickupQuery(Other, item);
++}
++
++function bool CoopStayPickupTakenBy(Weapon W, Pawn P)
++{
++	local int idx, i;
++
++	idx = CoopFindStayPickup(W, False);
++	if (idx == -1)
++		return False;
++	for (i = 0; i < 4; i++)
++		if (CoopStayTaker[idx * 4 + i] == P)
++			return True;
++	return False;
++}
++
++function CoopNoteStayPickupTaken(Weapon W, Pawn P)
++{
++	local int idx, i, freeSlot, numTakers, numPlayers;
++	local Pawn aPawn;
++
++	idx = CoopFindStayPickup(W, True);
++	if (idx == -1)
++	{
++		W.SetRespawn();	// table full: singleplayer behaviour
++		return;
++	}
++
++	freeSlot = -1;
++	for (i = 0; i < 4; i++)
++	{
++		if (CoopStayTaker[idx * 4 + i] == P)
++			freeSlot = -2;
++		else if ((freeSlot == -1) && ((CoopStayTaker[idx * 4 + i] == None) || CoopStayTaker[idx * 4 + i].bDeleteMe))
++			freeSlot = i;
++	}
++	if (freeSlot >= 0)
++		CoopStayTaker[idx * 4 + freeSlot] = P;
++
++	for (aPawn = Level.PawnList; aPawn != None; aPawn = aPawn.NextPawn)
++		if (Trestkon(aPawn) != None)
++			numPlayers++;
++	for (i = 0; i < 4; i++)
++		if ((Trestkon(CoopStayTaker[idx * 4 + i]) != None) && !CoopStayTaker[idx * 4 + i].bDeleteMe)
++			numTakers++;
++
++	if (numTakers >= numPlayers)
++	{
++		CoopStayPickup[idx] = None;
++		W.SetRespawn();
++	}
++}
++
+ function SendPlayer( PlayerPawn aPlayer, string URL )
+ {
+ 	local Pawn P;
+--- original_coop/tnmHalonGas.uc
++++ current/tnmHalonGas.uc
+@@ -60,12 +60,9 @@
+ 	}
+ 	//Copied from TNMFireBall.uc
+ 
+-	player = trestkon(getplayerpawn());
+-	if ( player != none )
+-	{
+-		if ( vsize(player.location - location) < suffocationradius )
+-			player.halongastimer = 0.5;
+-	}
++	// every player in range suffocates, not just the host
++	foreach RadiusActors(class'Trestkon', player, suffocationradius)
++		player.halongastimer = 0.5;
+ }
+ 
+ 
+--- original_coop/tnmMission23.uc
++++ current/tnmMission23.uc
+@@ -1774,7 +1774,7 @@
+ 			ogg.CombatOggFile="ABI_Underground_Combat_Reverse.ogg";
+ 			ogg.ConversationOggFile="ABI_Underground_Convo_Reverse.ogg";
+ 			ogg.DeathOggFile="ABI_Underground_Death_Reverse.ogg";
+-			ogg.SetCurrentOgg("ABI_Underground_Ambient_Intro_Reverse.ogg", "ABI_Underground_Ambient_Reverse.ogg", 0.0, MTRAN_FastFade);
++			ogg.SyncSetCurrentOgg("ABI_Underground_Ambient_Intro_Reverse.ogg", "ABI_Underground_Ambient_Reverse.ogg", 0.0, MTRAN_FastFade);
+ 		}
+         ogg.bReversed = true;
+     }
+@@ -1792,7 +1792,7 @@
+ 			ogg.CombatOggFile="ABI_Underground_Combat.ogg";
+ 			ogg.ConversationOggFile="ABI_Underground_Convo.ogg";
+ 			ogg.DeathOggFile="ABI_Underground_Death.ogg";
+-			ogg.SetCurrentOgg("ABI_Underground_Ambient_Intro.ogg", "ABI_Underground_Ambient.ogg", 0.0, MTRAN_FastFade);
++			ogg.SyncSetCurrentOgg("ABI_Underground_Ambient_Intro.ogg", "ABI_Underground_Ambient.ogg", 0.0, MTRAN_FastFade);
+ 		}
+ 		ogg.bReversed = false;
+     }
+--- original_coop/TNMOggMusicManager.uc
++++ current/TNMOggMusicManager.uc
+@@ -70,12 +70,64 @@
+ 		bServerCombat, bServerBoss, bServerAftermath, bServerUberAlles;
+ }
+ 
++// DXOgg's natives only act when Role == ROLE_Authority (they were written for
++// singleplayer). Client-side managers are proxies, so every native call made on
++// a client goes through these and borrows Authority for the call. Calling
++// SetCurrentOgg directly on a client silently does nothing.
++simulated function CoopNativeSetCurrentOgg(string oggFileIntro, string oggFileLoop, int playPos, EMusicTransition transition)
++{
++	local ENetRole oldRole;
++
++	oldRole = Role;
++	if (Level.NetMode == NM_Client)
++		Role = ROLE_Authority;
++	SetCurrentOgg(oggFileIntro, oggFileLoop, playPos, transition);
++	Role = oldRole;
++}
++
++simulated function float CoopNativeGetPosition()
++{
++	local ENetRole oldRole;
++	local float pos;
++
++	oldRole = Role;
++	if (Level.NetMode == NM_Client)
++		Role = ROLE_Authority;
++	pos = GetCurrentSongPosition();
++	Role = oldRole;
++	return pos;
++}
++
++simulated function string CoopNativeNextLoop()
++{
++	local ENetRole oldRole;
++	local string loop;
++
++	oldRole = Role;
++	if (Level.NetMode == NM_Client)
++		Role = ROLE_Authority;
++	loop = GetNextOggFileLoop();
++	Role = oldRole;
++	return loop;
++}
++
++simulated function CoopNativeStop()
++{
++	local ENetRole oldRole;
++
++	oldRole = Role;
++	if (Level.NetMode == NM_Client)
++		Role = ROLE_Authority;
++	StopPlayback();
++	Role = oldRole;
++}
++
+ simulated function SyncSetCurrentOgg(string oggFileIntro, string oggFileLoop, float playPos, EMusicTransition transition)
+ {
+ 	local Pawn P;
+ 	local Trestkon T;
+ 
+-	SetCurrentOgg(oggFileIntro, oggFileLoop, int(playPos), transition);
++	CoopNativeSetCurrentOgg(oggFileIntro, oggFileLoop, int(playPos), transition);
+ 	if (Level.NetMode != NM_Client)
+ 	{
+ 		RepActiveIntroOgg = oggFileIntro;
+@@ -97,7 +149,7 @@
+ 	soundPauses++;
+ 	if (soundPauses == 1)
+ 	{
+-		savedSongPos = GetCurrentSongPosition();
++		savedSongPos = CoopNativeGetPosition();
+ 		SyncSetCurrentOgg( "Blank.ogg" , "Blank.ogg" , 0.0 , MTRAN_Instant);
+ 		MusicMode = MUS_None;
+ 	}
+@@ -254,8 +306,8 @@
+ 
+ 		if (RepActiveLoopOgg != "" && (ClientLastLoopOgg != RepActiveLoopOgg || ClientLastIntroOgg != RepActiveIntroOgg))
+ 		{
+-			primaryOgg.SetCurrentOgg(RepActiveIntroOgg, RepActiveLoopOgg, 0, MTRAN_Instant);
+-			primaryOgg.GetCurrentSongPosition();
++			primaryOgg.CoopNativeSetCurrentOgg(RepActiveIntroOgg, RepActiveLoopOgg, 0, MTRAN_Instant);
++			primaryOgg.CoopNativeGetPosition();
+ 			foreach AllActors(class'TNMOggMusicManager', otherOgg)
+ 			{
+ 				otherOgg.Role = ROLE_SimulatedProxy;
+@@ -274,8 +326,8 @@
+ 			init();
+ 			if (Len(AmbientOggFile) > 0)
+ 			{
+-				primaryOgg.SetCurrentOgg(AmbientIntroOggFile, AmbientOggFile, 0, MTRAN_Instant);
+-				primaryOgg.GetCurrentSongPosition();
++				primaryOgg.CoopNativeSetCurrentOgg(AmbientIntroOggFile, AmbientOggFile, 0, MTRAN_Instant);
++				primaryOgg.CoopNativeGetPosition();
+ 				foreach AllActors(class'TNMOggMusicManager', otherOgg)
+ 				{
+ 					otherOgg.Role = ROLE_SimulatedProxy;
+@@ -469,7 +521,7 @@
+ 					{
+ 						// save our place in the ambient track
+ 						if (musicMode == MUS_Ambient)
+-							savedSongPos = GetCurrentSongPosition();
++							savedSongPos = CoopNativeGetPosition();
+ 						else
+ 							savedSongPos = 0.0;
+ 
+@@ -578,7 +630,7 @@
+ 						{
+ 							// save our place in the ambient track
+ 							if (musicMode == MUS_Ambient)
+-								savedSongPos = GetCurrentSongPosition();
++								savedSongPos = CoopNativeGetPosition();
+ 							else
+ 								savedSongPos = 0.0;
+ 							SyncSetCurrentOgg("", "Stereo_Nevermore.ogg", 0.0, MTRAN_FastFade);
+@@ -593,7 +645,7 @@
+ 						{
+ 							// save our place in the ambient track
+ 							if (musicMode == MUS_Ambient)
+-								savedSongPos = GetCurrentSongPosition();
++								savedSongPos = CoopNativeGetPosition();
+ 							else
+ 								savedSongPos = 0.0;
+ 							SyncSetCurrentOgg("", "FCRegistration_Boss.ogg", 0.0, MTRAN_FastFade);
+@@ -610,7 +662,7 @@
+ 							{
+ 								// save our place in the ambient track
+ 								if (musicMode == MUS_Ambient)
+-									savedSongPos = GetCurrentSongPosition();
++									savedSongPos = CoopNativeGetPosition();
+ 								else
+ 									savedSongPos = 0.0;
+ 									
+@@ -628,7 +680,7 @@
+ 							{
+ 								// save our place in the ambient track
+ 								if (musicMode == MUS_Ambient)
+-									savedSongPos = GetCurrentSongPosition();
++									savedSongPos = CoopNativeGetPosition();
+ 								else
+ 									savedSongPos = 0.0;
+ 								
+--- original_coop/TNMProjectile.uc
++++ current/TNMProjectile.uc
+@@ -196,7 +196,8 @@
+ 					
+ 		Player = Trestkon(GetPlayerPawn());
+ 		
+-		if (Player != None && Owner == Player && Trestkon(Owner).bQuadDamage)
++		// any player's quad damage, not just the host's
++		if (Trestkon(Owner) != None && Trestkon(Owner).bQuadDamage)
+ 			damage *= 4;
+ 
+ 		if (bExplodes)
+--- original_coop/TNMThrownProjectile.uc
++++ current/TNMThrownProjectile.uc
+@@ -15,7 +15,8 @@
+ 					
+ 		Player = Trestkon(GetPlayerPawn());
+ 		
+-		if (Player != None && Owner == Player && Trestkon(Owner).bQuadDamage)
++		// any player's quad damage, not just the host's
++		if (Trestkon(Owner) != None && Trestkon(Owner).bQuadDamage)
+ 			damage *= 4;
+ 
+ 		// flash the screen white based on how far away the explosion is
+--- original_coop/TNMWeapon.uc
++++ current/TNMWeapon.uc
+@@ -171,6 +171,14 @@
+ var bool bLoadAmmoFudge;
+ var class<Ammo> LastAmmoType;
+ 
++replication
++{
++	// attributes change movement (Att_Fleeting, Att_Quaking) and the inventory
++	// description, so the owning client needs them to predict and display correctly
++	reliable if ((Role == ROLE_Authority) && (bNetOwner))
++		Attribute, Attributes1, Attributes2;
++}
++
+ //HDTP weapon hands
+ function texture GetWeaponHandTex()
+ {
+@@ -263,7 +271,7 @@
+ 				ShotTime = Default.ShotTime;
+ 				if (HasAttribute(Att_Rapid))
+ 					ShotTime = Default.ShotTime * 0.55;
+-				if ( Level.NetMode != NM_Standalone )
++				if ( IsDeathmatchStats() )
+ 				{
+ 					if (HasReloadMod())
+ 						ReloadTime = mpReloadTime * (1.0+ModReloadTime);
+@@ -293,7 +301,7 @@
+ 				ShotTime = Default.ShotTime;
+ 				if (HasAttribute(Att_Rapid))
+ 					ShotTime = Default.ShotTime * 0.55;
+-				if ( Level.NetMode != NM_Standalone )
++				if ( IsDeathmatchStats() )
+ 				{
+ 					if (HasReloadMod())
+ 						ReloadTime = mpReloadTime * (1.0+ModReloadTime);
+@@ -962,9 +970,22 @@
+ 	local bool bResult;
+ 	local class<Ammo> defAmmoClass;
+ 	local Ammo defAmmo;
++	local tnmGameInfo coopGame;
++	local bool bCoopStayPickup;
+ 	// make sure that if you pick up a modded weapon that you
+ 	// already have, you get the mods
+ 	W = DeusExWeapon(Item);
++
++	// Co-op: world weapons stay (bCoopWeaponMode) so each player can take one.
++	// Weapon.HandlePickupQuery leaves a stay pickup in the world, and the ammo
++	// below was added in netgames regardless, so walking over it again refilled
++	// ammo forever. Each player gets a given pickup once (see SpawnCopy).
++	coopGame = tnmGameInfo(Level.Game);
++	if ((W != None) && (coopGame != None) && (Level.NetMode != NM_Standalone))
++		bCoopStayPickup = W.bWeaponStay && !W.bHeldItem && !W.bTossedOut;
++	if (bCoopStayPickup && (W.Class == Class) && coopGame.CoopStayPickupTakenBy(W, Pawn(Owner)))
++		return true;
++
+ 	if ((W != None) && (W.Class == Class))
+ 	{
+ 		//== We should be able to use multiple copies of single-use weapons
+@@ -1055,6 +1076,14 @@
+ 		}
+ 	}
+ 
++	if ((W != None) && (W.Class == Class) && (coopGame != None) && (Level.NetMode != NM_Standalone) && W.bWeaponStay)
++	{
++		if (bCoopStayPickup)
++			coopGame.CoopNoteStayPickupTaken(W, Pawn(Owner));
++		else if (W.bTossedOut)
++			W.SetRespawn();	// a dropped weapon is one item, not a stay pickup
++	}
++
+ 	bResult = Super(Weapon).HandlePickupQuery(Item);
+ 
+ 	// Notify the object belt of the new ammo
+@@ -1064,6 +1093,29 @@
+ 	return bResult;
+ }
+ 
++// Co-op: Weapon.SpawnCopy hands out a copy and leaves a stay pickup in the
++// world. Record who took it (it goes away once every player has one); a
++// dropped weapon is consumed by whoever picks it up.
++function inventory SpawnCopy(pawn Other)
++{
++	local Inventory Copy;
++	local bool bStayPickup, bTossedStay;
++
++	bStayPickup = bWeaponStay && !bHeldItem && !bTossedOut;
++	bTossedStay = bWeaponStay && bTossedOut;
++
++	Copy = Super.SpawnCopy(Other);
++
++	if ((Copy != self) && (Level.NetMode != NM_Standalone) && (tnmGameInfo(Level.Game) != None))
++	{
++		if (bStayPickup)
++			tnmGameInfo(Level.Game).CoopNoteStayPickupTaken(self, Other);
++		else if (bTossedStay)
++			SetRespawn();
++	}
++	return Copy;
++}
++
+ function DropFrom(vector StartLocation)
+ {
+ 	checkweaponskins();
+@@ -1076,8 +1128,23 @@
+ //empty placeholder :p
+ }
+ 
++// True only in real deathmatch games. DeusExWeapon swaps in mp* stats whenever
++// NetMode != NM_Standalone, which also hit co-op (tnmGameInfo is not a DeusExMPGame).
++simulated function bool IsDeathmatchStats()
++{
++	if (Level.NetMode == NM_Standalone)
++		return False;
++	if (Level.Game != None)
++		return Level.Game.IsA('DeusExMPGame');
++	return (DeusExPlayer(Owner) != None) && (DeusExPlayer(Owner).DXGame != None);
++}
++
+ function PostBeginPlay()
+ {
++	// DeusExWeapon.PostBeginPlay triples PickupAmmoCount in netgames
++	if ((Level.NetMode != NM_Standalone) && !IsDeathmatchStats())
++		bNeedToSetMPPickupAmmo = False;
++
+ 	super.PostBeginPlay();
+ 
+ 	//the blood will automatically show itself when the weapon is bloody and not in first person
+@@ -2471,7 +2538,7 @@
+ 	for (i=0; i<numProj; i++)
+ 	{
+ 		// If we have multiple slugs, then lower our accuracy a bit after the first slug so the slugs DON'T all go to the same place
+-		if ((i > 0) && (Level.NetMode != NM_Standalone))
++		if ((i > 0) && IsDeathmatchStats())
+ 			if (currentAccuracy < MinProjSpreadAcc)
+ 				currentAccuracy = MinProjSpreadAcc;
+ 
+@@ -2674,7 +2741,7 @@
+ 	for (i=0; i<numProj; i++)
+ 	{
+ 		// If we have multiple slugs, then lower our accuracy a bit after the first slug so the slugs DON'T all go to the same place
+-		if ((i > 0) && (Level.NetMode != NM_Standalone))
++		if ((i > 0) && IsDeathmatchStats())
+ 			if (currentAccuracy < MinProjSpreadAcc)
+ 				currentAccuracy = MinProjSpreadAcc;
+ 
+@@ -3150,7 +3217,7 @@
+ 		numSlugs = 1;
+ 	}
+ 	
+-	if (Level.NetMode != NM_Standalone)
++	if (IsDeathmatchStats())
+ 	{
+ 		/*
+ 		if (ProjectileClass != None)
+@@ -3176,7 +3243,7 @@
+ 	str = String(basedmg);
+ 	
+ 	//G-Flex: display the correct damage bonus
+-	if (Level.NetMode != NM_Standalone)
++	if (IsDeathmatchStats())
+ 		dmg = Default.mpHitDamage * numSlugs;
+ 	else
+ 	{
+@@ -3215,7 +3282,7 @@
+ 		str = msgInfoNA;
+ 	else
+ 	{
+-		if ( Level.NetMode != NM_Standalone )
++		if ( IsDeathmatchStats() )
+ 		{
+ 			// if ((AmmoType != class'AmmoNone') && (!bHandToHand) && (mpReloadCount != 0))
+ 			// {
+@@ -3277,7 +3344,7 @@
+ 		str = msgInfoNA;
+ 	else
+ 	{
+-		if (Level.NetMode != NM_Standalone )
++		if (IsDeathmatchStats() )
+ 			str = FormatFloatString(Default.mpReloadTime, 0.1) @ msgTimeUnit;
+ 		else
+ 			str = FormatFloatString(Default.ReloadTime, 0.1) @ msgTimeUnit;
+@@ -3302,7 +3369,7 @@
+ 	winInfo.AddInfoItem(msgInfoRecoil, str, (HasRecoilMod() || (GetWeaponSkill() < 0.0 && Default.recoilStrength > 0.0)));
+ 
+ 	// base accuracy (2.0 = 0%, 0.0 = 100%)
+-	if ( Level.NetMode != NM_Standalone )
++	if ( IsDeathmatchStats() )
+ 	{
+ 		str = Int((2.0 - Default.mpBaseAccuracy)*50.0) $ "%";
+ 		mod = (Default.mpBaseAccuracy - (BaseAccuracy + GetWeaponSkill())) * 0.5;
+@@ -3329,7 +3396,7 @@
+ 		str = msgInfoNA;
+ 	else
+ 	{
+-		if ( Level.NetMode != NM_Standalone )
++		if ( IsDeathmatchStats() )
+ 			str = FormatFloatString(Default.mpAccurateRange/16.0, 1.0) @ msgRangeUnit;
+ 		else
+ 			str = FormatFloatString(Default.AccurateRange/16.0, 1.0) @ msgRangeUnit;
+@@ -3347,7 +3414,7 @@
+ 		str = msgInfoNA;
+ 	else
+ 	{
+-		if ( Level.NetMode != NM_Standalone )
++		if ( IsDeathmatchStats() )
+ 			str = FormatFloatString(Default.mpMaxRange/16.0, 1.0) @ msgRangeUnit;
+ 		else
+ 			str = FormatFloatString(Default.MaxRange/16.0, 1.0) @ msgRangeUnit;
+@@ -4572,7 +4639,7 @@
+         checkit = False;
+ 
+     // Disabled accuracy mods based on health in multiplayer
+-    if ( Level.NetMode != NM_Standalone )
++    if ( IsDeathmatchStats() )
+         checkit = False;
+ 
+     if (checkit)
+@@ -4616,7 +4683,7 @@
+     if (accuracy < 0.0)
+         accuracy = 0.0;
+ 
+-    if (Level.NetMode != NM_Standalone)
++    if (IsDeathmatchStats())
+         if (accuracy < MinWeaponAcc)
+             accuracy = MinWeaponAcc;
+ 
+--- original_coop/Trestkon.uc
++++ current/Trestkon.uc
+@@ -657,6 +657,9 @@
+ var int lastSyncedCredits;
+ var int lastServerAugLevelSum;
+ var int lastClientAugLevelSum;
++var int lastSentMovePrefs;
++var bool bSentMovePrefs;
++var int coopWeaponSyncIndex;
+ 
+ //
+ // network replication
+@@ -665,15 +668,212 @@
+ {
+     // server to client
+     reliable if ((Role == ROLE_Authority) && (bNetOwner))
+-        playerfists, ClientSyncBoolFlag, ClientSyncGoal, ClientSyncNote, ClientPlayDataLink,
++        playerfists, bClientInThirdPersonConvo, clientConvoTarget, clientConvoTargetLoc, bSkating;
++    // Functions: no bNetOwner here. It is only meaningful while variables are
++    // being replicated; at call time it can be stale, and the call then runs on
++    // the server instead of being sent (seen with ClientPlayOgg). Client
++    // functions only ever go to the owning connection anyway.
++    reliable if (Role == ROLE_Authority)
++        ClientSyncBoolFlag, ClientSyncGoal, ClientSyncNote, ClientPlayDataLink,
+         ClientShowSubtitle, ClientHideSubtitle, ClientPlayOgg,
+-        ClientSyncMoverState, ClientSyncHackableState, ClientAddBark, ClientPrepareTravel,
+-        bClientInThirdPersonConvo, clientConvoTarget, clientConvoTargetLoc;
++        ClientSyncMoverState, ClientSyncHackableState, ClientAddBark, ClientPrepareTravel;
++    unreliable if (Role == ROLE_Authority)
++        ClientSyncWeaponMods;
+ 	reliable if (Role < ROLE_Authority)
+-		FloorTexture, footprintoffset, bWalkingOnSnow, bWalkingBackwards, bSkating,
+-		  SelectFists, Give, kill, StartSkates, StopSkates, ignite, douse, 
++		FloorTexture, footprintoffset, bWalkingOnSnow, bWalkingBackwards,
++		  SelectFists, Give, kill, StartSkates, StopSkates, ignite, douse,
+ 		  SpawnFootprint, bMustJump, jumpBob, ServerSyncBoolFlag, clientSelectedConChoice,
+-		  CoopSave, CoopContinue;
++		  CoopSave, CoopContinue, ServerSetMovementPrefs;
++}
++
++// ----------------------------------------------------------------------
++// Co-op movement prefs
++//
++// HandleWalking() runs on the server for remote players (MoveAutonomous), but
++// bAlwaysRun/bToggleCrouch are globalconfig and bToggleWalk is flipped by a
++// client-only exec, so the server used the host's settings and simulated the
++// client walking/crouching differently than the client predicted.
++// ----------------------------------------------------------------------
++
++simulated function CoopSendMovementPrefs()
++{
++	local int prefs;
++
++	if (bAlwaysRun)
++		prefs = prefs | 1;
++	if (bToggleCrouch)
++		prefs = prefs | 2;
++	if (bToggleWalk)
++		prefs = prefs | 4;
++
++	if (bSentMovePrefs && (prefs == lastSentMovePrefs))
++		return;
++
++	bSentMovePrefs = True;
++	lastSentMovePrefs = prefs;
++	ServerSetMovementPrefs(bAlwaysRun, bToggleCrouch, bToggleWalk);
++}
++
++function ServerSetMovementPrefs(bool bNewAlwaysRun, bool bNewToggleCrouch, bool bNewToggleWalk)
++{
++	if ((Level.NetMode == NM_Standalone) || (Viewport(Player) != None))
++		return;
++
++	bAlwaysRun = bNewAlwaysRun;
++	bToggleWalk = bNewToggleWalk;
++	if (bToggleCrouch != bNewToggleCrouch)
++	{
++		bToggleCrouch = bNewToggleCrouch;
++		bCrouchOn = False;
++		bWasCrouchOn = False;
++	}
++}
++
++// ----------------------------------------------------------------------
++// Co-op movement speed
++//
++// DeusExPlayer.ProcessMove/GetCurrentGroundSpeed switch to deathmatch rules
++// whenever NetMode != NM_Standalone (no leg damage slowdown, no backpedal
++// penalty, DM heavy weapon formula and GEP turn rate). Re-apply the
++// singleplayer rules on both client and server so prediction matches.
++// ----------------------------------------------------------------------
++
++function CoopApplySinglePlayerGroundSpeed(vector newAccel)
++{
++	local float defSpeed, newSpeed;
++	local rotator flatRot;
++
++	defSpeed = GetCurrentGroundSpeed();
++	newSpeed = defSpeed;
++
++	if (HealthLegLeft < 1)
++		newSpeed -= (defSpeed/2) * 0.25;
++	else if (HealthLegLeft < 34)
++		newSpeed -= (defSpeed/2) * 0.15;
++	else if (HealthLegLeft < 67)
++		newSpeed -= (defSpeed/2) * 0.10;
++
++	if (HealthLegRight < 1)
++		newSpeed -= (defSpeed/2) * 0.25;
++	else if (HealthLegRight < 34)
++		newSpeed -= (defSpeed/2) * 0.15;
++	else if (HealthLegRight < 67)
++		newSpeed -= (defSpeed/2) * 0.10;
++
++	if (HealthTorso < 67)
++		newSpeed -= (defSpeed/2) * 0.05;
++
++	if ((HealthLegLeft < 1) && (HealthLegRight < 1))
++	{
++		newSpeed = defSpeed * 0.8;
++		bIsWalking = True;
++		bForceDuck = True;
++	}
++	else if (bIsCrouching || bForceDuck)
++		bIsWalking = True;
++
++	if (CarriedDecoration != None)
++		newSpeed -= CarriedDecoration.Mass * 2;
++	else if ((DeusExWeapon(Weapon) != None) && (Weapon.Mass > 30) && (DeusExWeapon(Weapon).GetWeaponSkill() > -0.25))
++	{
++		bIsWalking = True;
++		newSpeed = defSpeed;
++	}
++	else if ((inHand != None) && inHand.IsA('POVCorpse'))
++		newSpeed -= inHand.Mass * 3;
++
++	TurnRateAdjuster = 1.0;
++
++	if ((newSpeed <= defSpeed / 3) && !bForceDuck)
++	{
++		bIsWalking = True;
++		newSpeed = defSpeed;
++	}
++
++	// Singleplayer checks aForward < 0, but input axes never reach the server.
++	// The acceleration is replicated in ServerMove, so both sides agree on it.
++	flatRot = Rotation;
++	flatRot.Pitch = 0;
++	flatRot.Roll = 0;
++	if ((newAccel Dot vector(flatRot)) < -1.0)
++		newSpeed *= 0.65;
++
++	GroundSpeed = FMax(newSpeed, 100);
++}
++
++// ----------------------------------------------------------------------
++// Co-op weapon mod stats
++//
++// Weapon mod results (scope, clip size, recoil, accuracy, range, reload time)
++// are not replicated by DeusExWeapon, so the client's inventory screen, scope
++// toggle and crosshair used stale values. Push the held weapon plus one other
++// weapon per call (called once a second from tnmGameInfo.SyncCoopState).
++// ----------------------------------------------------------------------
++
++function CoopSyncWeaponMods()
++{
++	local Inventory Inv;
++	local DeusExWeapon W;
++	local int i;
++
++	if (DeusExWeapon(Weapon) != None)
++		CoopSendWeaponMods(DeusExWeapon(Weapon));
++
++	for (Inv = Inventory; Inv != None; Inv = Inv.Inventory)
++	{
++		if ((DeusExWeapon(Inv) != None) && (Inv != Weapon))
++		{
++			if (i == coopWeaponSyncIndex)
++			{
++				W = DeusExWeapon(Inv);
++				break;
++			}
++			i++;
++		}
++	}
++
++	if (W != None)
++	{
++		CoopSendWeaponMods(W);
++		coopWeaponSyncIndex++;
++	}
++	else
++		coopWeaponSyncIndex = 0;
++}
++
++function CoopSendWeaponMods(DeusExWeapon W)
++{
++	ClientSyncWeaponMods(W, W.bHasScope, W.ReloadCount, W.recoilStrength, W.BaseAccuracy, W.AccurateRange, W.ReloadTime);
++}
++
++simulated function ClientSyncWeaponMods(DeusExWeapon W, bool bNewHasScope, byte NewReloadCount, float NewRecoil, float NewBaseAccuracy, int NewAccurateRange, float NewReloadTime)
++{
++	if ((W == None) || (Role == ROLE_Authority))
++		return;
++
++	W.bHasScope = bNewHasScope;
++	W.ReloadCount = NewReloadCount;
++	W.recoilStrength = NewRecoil;
++	W.BaseAccuracy = NewBaseAccuracy;
++	W.AccurateRange = NewAccurateRange;
++	W.ReloadTime = NewReloadTime;
++	if (W.AmmoType != None)
++		W.AmmoName = W.AmmoType.Class;
++}
++
++// ----------------------------------------------------------------------
++// CreateNanoKeyInfo()
++//
++// Keys are copied between players every second in co-op. new(Self) binds the
++// key's Outer to this pawn, which is destroyed on travel and trips
++// "Removed!=0" (UnObj.cpp) on exit.
++// ----------------------------------------------------------------------
++
++function NanoKeyInfo CreateNanoKeyInfo()
++{
++	if (Level.NetMode != NM_Standalone)
++		return new(None) Class'NanoKeyInfo';
++	return Super.CreateNanoKeyInfo();
+ }
+ 
+ simulated function ClientPrepareTravel()
+@@ -684,7 +884,7 @@
+ 		return;
+ 	foreach AllActors(class'TNMOggMusicManager', ogg)
+ 	{
+-		ogg.StopPlayback();
++		ogg.CoopNativeStop();
+ 	}
+ 	if (DeusExRootWindow(rootWindow) != None)
+ 		DeusExRootWindow(rootWindow).ClearWindowStack();
+@@ -1198,13 +1398,17 @@
+ 				otherOgg.AmbientIntroOggFile = introTrack;
+ 				otherOgg.AmbientOggFile = loopTrack;
+ 			}
+-			ogg.SetCurrentOgg(introTrack, loopTrack, 0, MTRAN_Instant);
+-			ogg.GetCurrentSongPosition();
++			ogg.CoopNativeSetCurrentOgg(introTrack, loopTrack, 0, MTRAN_Instant);
++			ogg.CoopNativeGetPosition();
+ 			log("CoopMod ClientPlayOgg: intro=" $ introTrack $ " loop=" $ loopTrack $ " stereo=" $ bIsStereo $ " ogg=" $ ogg);
+ 		}
+ 		else
+ 		{
+-			ogg.GetCurrentSongPosition();
++			// the stream can still be empty if an earlier call landed while the
++			// manager was a proxy; restart it rather than stay silent
++			if ((loopTrack != "") && (ogg.CoopNativeNextLoop() == ""))
++				ogg.CoopNativeSetCurrentOgg(introTrack, loopTrack, 0, MTRAN_Instant);
++			ogg.CoopNativeGetPosition();
+ 		}
+ 	}
+ }
+@@ -1376,7 +1580,9 @@
+ 	if (Src == None || Src == Self)
+ 		return;
+ 
+-	if (Src.flagBase != None && flagBase != None)
++	// tnmGameInfo.CoopMergeFlags() handles flags (including flags cleared back
++	// to False) once its baseline exists; this one-way copy is only a fallback.
++	if (Src.flagBase != None && flagBase != None && (tnmGameInfo(Level.Game) == None || !tnmGameInfo(Level.Game).bCoopFlagMergeActive))
+ 	{
+ 		it = Src.flagBase.CreateIterator(FLAG_Bool);
+ 		while (Src.flagBase.GetNextFlagName(it, flagName))
+@@ -1425,7 +1631,7 @@
+ 		dstGoal = FindGoal(srcGoal.goalName);
+ 		if (dstGoal == None)
+ 		{
+-			if (NetConnection(Player) != None && rpcCount >= 3)
++			if (NetConnection(Player) != None && rpcCount >= 8)
+ 				break;
+ 			dstGoal = AddGoal(srcGoal.goalName, srcGoal.bPrimaryGoal);
+ 			if (dstGoal != None)
+@@ -1444,7 +1650,7 @@
+ 				dstGoal.SetText(srcGoal.text);
+ 			if (srcGoal.bCompleted && !dstGoal.bCompleted)
+ 			{
+-				if (NetConnection(Player) != None && rpcCount >= 3)
++				if (NetConnection(Player) != None && rpcCount >= 8)
+ 					break;
+ 				GoalCompleted(srcGoal.goalName);
+ 				if (NetConnection(Player) != None)
+@@ -1478,7 +1684,7 @@
+ 		}
+ 		if (!bFoundNote && srcNote.text != "")
+ 		{
+-			if (NetConnection(Player) != None && rpcCount >= 3)
++			if (NetConnection(Player) != None && rpcCount >= 8)
+ 				break;
+ 			dstNote = AddNote(srcNote.text, srcNote.bUserNote, True);
+ 			if (dstNote != None && srcNote.textTag != '')
+@@ -1507,7 +1713,7 @@
+ 		}
+ 	}
+ 
+-	if (NetConnection(Player) != None && Credits != lastSyncedCredits && rpcCount < 3)
++	if (NetConnection(Player) != None && Credits != lastSyncedCredits && rpcCount < 8)
+ 	{
+ 		lastSyncedCredits = Credits;
+ 		ClientSyncBoolFlag(SafeStringToName("CoopCredits_" $ Credits), True);
+@@ -1931,6 +2137,9 @@
+ 			}
+ 		}
+ 	}
++
++	if (Level.NetMode == NM_Client)
++		CoopSendMovementPrefs();
+ 
+ 	if (Role == ROLE_Authority && bClientInThirdPersonConvo)
+ 	{
+@@ -6611,12 +6820,22 @@
+ 
+ function float GetCurrentGroundSpeed()
+ {
+-	local float speed;
++	local float speed, augValue;
+ 
+ 	if (bSkating)
+ 		speed = Default.GroundSpeed * 17;
++	else if (Level.NetMode == NM_Standalone)
++		speed = super.GetCurrentGroundSpeed();
++	else if (AugmentationSystem == None)
++		speed = Default.GroundSpeed;	// super returns 0 here, which crawls the client until augs replicate
+ 	else
+-		speed = super.GetCurrentGroundSpeed();
++	{
++		// singleplayer formula; super uses Human.mpGroundSpeed in netgames
++		augValue = AugmentationSystem.GetAugLevelValue(class'AugSpeed');
++		if (augValue == -1.0)
++			augValue = 1.0;
++		speed = Default.GroundSpeed * augValue;
++	}
+ 
+ 	return speed;
+ }
+@@ -6889,7 +7108,10 @@
+ 		}
+ 
+ 		Super.ProcessMove(DeltaTime, newAccel, DodgeMove, DeltaRot);
+-		
++
++		if ((Level.NetMode != NM_Standalone) && !bSkating)
++			CoopApplySinglePlayerGroundSpeed(newAccel);
++
+ 		if (TNMWeapon(Weapon) != None && TNMWeapon(Weapon).Attribute == Att_Fleeting)
+ 			GroundSpeed *= 1.2;
+ 		
+@@ -7074,6 +7296,11 @@
+             }
+             return;
+         }
++
++        // singleplayer swim speed; DeusExPlayer uses Human.mpWaterSpeed (and an
++        // Aqualung speed bonus) in netgames
++        if ((Level.NetMode != NM_Standalone) && (SkillSystem != None))
++            WaterSpeed = Default.WaterSpeed * SkillSystem.GetSkillLevelValue(class'SkillSwimming');
+ 
+         GetAxes(ViewRotation,X,Y,Z);
+         Acceleration = NewAccel;
+@@ -11389,6 +11616,25 @@
+ // DEUS_EX AMSD For keeping multiplayer working in better shape
+ // ----------------------------------------------------------------------
+ 
++// The ammo the player picked in the inventory info pane. Don't use
++// PersonaInventoryInfoWindow.GetSelectedAmmo() here: Clear() destroys the ammo
++// buttons without resetting selectedAmmoButton, so after clicking a different
++// item it reads a freed window and crashes. winTileAmmo is nulled by Clear(),
++// so walking its live children is safe.
++simulated function class<Ammo> CoopGetLoadedAmmoButton(PersonaInventoryInfoWindow winInfo)
++{
++	local Window w;
++
++	if ((winInfo == None) || (winInfo.winTileAmmo == None))
++		return None;
++
++	for (w = winInfo.winTileAmmo.GetTopChild(); w != None; w = w.GetLowerSibling())
++		if ((PersonaAmmoDetailButton(w) != None) && PersonaAmmoDetailButton(w).IsLoaded())
++			return PersonaAmmoDetailButton(w).GetAmmo();
++
++	return None;
++}
++
+ simulated function RefreshSystems(float DeltaTime)
+ {
+ 	local DeusExRootWindow root;
+@@ -11413,7 +11659,7 @@
+ 		{
+ 			if (ogg.Role != ROLE_SimulatedProxy)
+ 				ogg.Role = ROLE_SimulatedProxy;
+-			ogg.GetCurrentSongPosition();
++			ogg.CoopNativeGetPosition();
+ 		}
+ 		foreach AllActors(class'PrecipitationNode', precipNode)
+ 		{
+@@ -11459,7 +11705,9 @@
+ 			if (invWin != None && invWin.selectedItem != None && invWin.winInfo != None)
+ 			{
+ 				selWeap = DeusExWeapon(invWin.selectedItem.GetClientObject());
+-				selAmmo = invWin.winInfo.GetSelectedAmmo();
++				selAmmo = None;
++				if (selWeap != None)
++					selAmmo = CoopGetLoadedAmmoButton(invWin.winInfo);
+ 				if (selWeap != None && selAmmo != None && selAmmo != selWeap.AmmoName)
+ 				{
+ 					for (i = 0; i < 3; i++)

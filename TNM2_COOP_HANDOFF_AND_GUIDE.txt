@@ -1,0 +1,142 @@
+================================================================================
+  THE NAMELESS MOD 2.0 (TNM 2.0) — 2-PLAYER CO-OP MOD
+  PLAYTEST GUIDE & AI DEVELOPER HANDOFF NOTES
+================================================================================
+
+1. QUICK START — HOW TO INSTALL & PLAY WITH A FRIEND (OR TEST LOCALLY)
+--------------------------------------------------------------------------------
+Prerequisites:
+- Both players must have Deus Ex: Game of the Year Edition + Deus Ex: Revision
+  installed on Steam, with The Nameless Mod 2.0 (Steam Workshop ID: 1774011024)
+  subscribed/installed so the TNM2 folder exists at:
+  ...\steamapps\common\Deus Ex\Revision\TNM2\
+
+To Install the Playtest Bundle on Another Player's PC:
+1. Extract the contents of "TNM2_Coop_Playtest_Bundle.zip" directly into your
+   "...\steamapps\common\Deus Ex\Revision\TNM2\" folder (allowing it to place
+   CoopMod\System\TNM.u, DXOgg.dll, TNM_Host.ini, TNM_Client.ini, and the .bat
+   launchers).
+   * NOTE: If installing on a different drive/path than D:\games\steam\...,
+     open TNM_Host.ini and TNM_Client.ini and make sure any absolute paths
+     under [Core.System] match your Steam library folder, or simply add:
+       Paths=CoopMod\System\*.u
+     as the FIRST Paths= line under [Core.System] in your own TNM.ini.
+
+How to Launch:
+- HOST PLAYER (Listen Server):
+  Run "Host_TNM_Coop.bat" inside Revision\TNM2\.
+  * Default UDP Port: 7790 (if playing over the internet, forward UDP 7790-7791
+    or use a virtual LAN such as Radmin VPN / Tailscale / ZeroTier / Hamachi).
+  * Always starts on a fresh 20_PhasApartment unless you enter another map name
+    or load a saved Co-op campaign from the Escape menu.
+
+- CLIENT PLAYER (Partner):
+  Run "Join_TNM_Coop.bat" inside Revision\TNM2\ and enter the Host's IP address
+  (e.g. LAN/VPN IP or 127.0.0.1 for local testing).
+
+- SINGLE-PC 2-INSTANCE LOCAL TEST (Host + Client Side-by-Side):
+  Run "Test_Local_Coop.bat" inside Revision\TNM2\.
+  * Automatically launches a windowed Host instance ("Trestkon") on
+    20_PhasApartment, waits 10 seconds, deletes Running.ini, and launches a
+    windowed Client instance ("Partner") that connects to 127.0.0.1:7790.
+
+--------------------------------------------------------------------------------
+2. IN-GAME CO-OP CONTROLS & FEATURES
+--------------------------------------------------------------------------------
+- Escape Menu Save & Load:
+  * Press ESC -> "Save Game": Saves the entire Co-op campaign (map, player
+    positions, inventories, credits, skills, augmentations, goals, notes, keys,
+    flags, unlocked/picked doors, and remaining world items) to TNMCoopSave.ini.
+  * Press ESC -> "Load Game": Shows your saved Co-op map slot ("Co-op Save
+    Slot 1") and lets either Host or Client reload it (even after closing and
+    reopening the game another day).
+  * Console equivalents: "CoopSave" and "CoopContinue" (or "HostCoop <map>" /
+    "JoinCoop <IP>").
+
+- Co-op Conversations & InfoLinks:
+  * Either Host or Client can frob NPCs to initiate conversations.
+  * Whoever initiates a 3rd-person conversation gets the cutscene camera/choices
+    (Client selects dialogue options using number keys 1-9 or Mouse Wheel +
+    Left-Click / Frob).
+  * InfoLinks (DataLinks) display in the top-left HUD for both Host and Client
+    with speaker portraits, text, and audio.
+
+- Shared Progression & Individual Loadouts:
+  * Goals, Notes, NanoKeys/Passwords, Credits, and Story Flags synchronize
+    automatically between Host and Client.
+  * Each player has their own independent Inventory, Weapons, Ammo, Health,
+    Bioelectric Energy, Skills, and Augmentations (with 2x world pickup
+    duplication for weapons/items/credits so both players can gear up).
+
+--------------------------------------------------------------------------------
+3. ARCHITECTURE & WORKSPACE HANDOFF (FOR ANTIGRAVITY AI / DEVELOPERS)
+--------------------------------------------------------------------------------
+- Source Code & Build Workspace:
+  C:\Users\bluee\.gemini\antigravity\scratch\tnm-coop\
+  * UnrealScript Source: src\TNM\Classes\*.uc
+  * Build Script:        tools\build_coop.ps1
+  * Dist Bundle Folder:  dist\TNM2_Coop_Playtest_Bundle\
+  * Workshop Package:    workshop_package\
+
+- Active Runtime Directory:
+  d:\games\steam\steamapps\common\Deus Ex\Revision\TNM2\
+  * Co-op Compiled Package: CoopMod\System\TNM.u
+  * Patched Music DLL:      DXOgg.dll (original backed up at DXOgg.dll.bak)
+  * Host Config / Log:      TNM_Host.ini / TNM_Host.log
+  * Client Config / Log:    TNM_Client.ini / TNM_Client.log
+  * Persistent Co-op Save:  TNMCoopSave.ini
+
+- How Steam Auto-Update Isolation Works:
+  1. Vanilla Steam Workshop files in:
+     d:\games\steam\steamapps\workshop\content\397550\1774011024\System\TNM.u
+     are NEVER modified permanently.
+  2. tools\build_coop.ps1 temporarily compiles TNM.u using HTKEditorCli.exe,
+     copies the built TNM.u to Revision\TNM2\CoopMod\System\TNM.u and
+     scratch\tnm-coop\workshop_package\System\TNM.u, and immediately restores
+     the vanilla 1774011024\System\TNM.u from backup.
+  3. TNM_Host.ini and TNM_Client.ini list "Paths=CoopMod\System\*.u" as the
+     VERY FIRST entry under [Core.System] so TNM.exe loads the Co-op TNM.u
+     ahead of the Workshop TNM.u while loading all maps/textures/sounds from
+     the Workshop folder.
+
+- Key Modified Classes in src\TNM\Classes\:
+  * tnmGameInfo.uc: Listen-server login/spawn handling, 2x item duplication,
+    SyncCoopState() 1Hz loop, deferred conversation queue, cross-session
+    SaveCoopSessionToDefaults() / RestoreCoopSessionFromDefaults() into
+    TNMCoopSave.ini.
+  * Trestkon.uc: Player replication block, Client UI initialization, client-side
+    subtitle/InfoLink HUD rendering (ClientShowSubtitle), client-side dialogue
+    choice UI, client-side weapon/skill/aug/computer/mover/hackable RPCs,
+    Escape menu Save/Load wiring (ShowMainMenu), CoopSave / CoopContinue.
+  * tnmconplay.uc & tnmdatalinkplay.uc: Co-op conversation & InfoLink syncing,
+    closest/initiating player targeting, client choice forwarding, audio/text
+    broadcasting.
+  * TNMMissionScript.uc & tnmMission*.uc: Multi-player proximity checks (fixing
+    hardcoded GetPlayerPawn() distance checks), SaveCoopMapState() and
+    RestoreCoopMapState() using CS_* flags.
+  * TNMOggMusicManager.uc & DXOgg.dll: Replicated Ogg music state
+    (RepActiveIntroOgg / RepActiveLoopOgg) and binary patches in DXOgg.dll
+    (preserving PE .reloc offsets at 0x6E14, 0x50D6, 0x50E8, 0x510A, 0x5112)
+    so unfocused window background threads don't self-terminate and Client
+    GetCurrentSongPosition() drives ADXOgg::Tick.
+
+--------------------------------------------------------------------------------
+4. KNOWN OPEN ISSUES TO REVISIT LATER
+--------------------------------------------------------------------------------
+1. Exit Assertion on Host Shutdown (Harmless on Exit, Easy Fix Next Session):
+   - Closing the Host game after traveling/reloading can show:
+     "Assertion failed: Removed!=0 [UnObj.cpp:2986] ... (NanoKeyInfo23)"
+   - Cause: DeusExGoal and DeusExNote were already fixed by switching new(Self)
+     to new(None) in Trestkon.uc; NanoKeyRing.GiveKey() in DeusEx.u still uses
+     new(Self) Class'NanoKeyInfo' (which binds Outer to a Trestkon Actor that
+     gets destroyed on travel). Overriding GiveKey() in a TNM NanoKeyRing
+     subclass (or calling RemoveAllKeys() before actor destruction) will fix it.
+2. Client-Side Music / Audio Polish:
+   - Continue testing client-side Ogg music transitions across maps/combat and
+     audio channel behavior during longer 2-player sessions.
+3. 1st-Person Conversations When Host Is Dead:
+   - Currently DeusExPlayer.StartConversation() rejects conversations when
+     HostPlayer is in state 'Dying' (Health <= 0). Planned solution: either
+     implement a Co-op downed/auto-revive mechanic or allow StartConversation()
+     while downed so Client-triggered 1st-person conversations never fail.
+================================================================================

@@ -1,0 +1,29 @@
+# Compiled Co-op package & backups (built locally via Build_And_Deploy_Coop.bat)
+CoopMod/System/TNM.u
+*.bak
+*.bak_*
+
+# Machine-local self-test & Steam path overrides / caches
+Tools/coop_selftest/selftest_config.json
+Tools/coop_selftest/.cache/
+__pycache__/
+*.py[cod]
+
+# Transient HTK build & runtime artifacts
+HTKWork/
+HTK.exe
+HTK.dll
+HTK_Build.ini
+build_tnm.txt
+Running.ini
+*.log
+
+# Local player preferences & campaign save files
+TNMCoopPrefs.ini
+TNMCoopSave.ini
+CoopSlot*.ini
+Save/
+
+# Packed release archives
+*.zip
+*.7z

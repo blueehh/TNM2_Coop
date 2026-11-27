@@ -1,0 +1,19 @@
+# Preserve exact line endings across UnrealScript, shell scripts, batch files, and INIs
+*.uc text eol=crlf
+*.ini text eol=crlf
+*.int text eol=crlf
+*.bat text eol=crlf
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+
+# Binary assets (no text conversion or diffing)
+*.u binary
+*.dll binary
+*.3d binary
+*.pcx binary
+*.wav binary
+*.ogg binary
+*.png binary
+*.zip binary
+*.7z binary
